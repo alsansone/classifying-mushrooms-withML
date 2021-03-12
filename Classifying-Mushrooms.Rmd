@@ -1,0 +1,538 @@
+---
+title: "Classifying Mushrooms"
+output: html_notebook
+---
+
+The goal of this project is to identify mushrooms that are edible or are poisonous based on various physical features of the mushroom. The original dataset can be obtained here:
+
+* [Mushrooms Dataset](https://www.kaggle.com/uciml/mushroom-classification)
+
+# Exploring and Preparing the Data
+
+```{r}
+# Importing the dataset and libraries
+mushrooms <- read.csv("mushrooms.csv", stringsAsFactors = TRUE, na.strings = "?")
+```
+<br>
+The dataset is comprised of 23 variables of 8124 observations. All the variables are categorical. Each variable is comprised of different letters representing a shortened version of the feature name. The class variable consists of 2 levels, e = edible and p = poisonous.
+
+```{r}
+# Summary of the dataset
+str(mushrooms)
+```
+<br>
+
+## Data Cleaning
+
+The variable **stalk.root** contains "?" which indicates a missing value. We will update that to NA. None of the other variables are missing data. The **stalk.root** variable is missing ~30.5% of its data. Removing those rows will put quite a dent in the information and so we will impute the data later using MICE
+
+```{r}
+100 * length(which(!complete.cases(mushrooms$stalk.root))) / length(complete.cases(mushrooms$stalk.root))
+colSums(is.na(mushrooms))
+prop.table(table(mushrooms$stalk.root, exclude = NULL))
+```
+<br>
+We will replace the letter representations of the variables by the actual word to better understand what features are being measured.
+
+```{r}
+levels(mushrooms$class) <- c(e="edible", p="poisonous")
+levels(mushrooms$cap.shape) <- c(b="bell", c="conical", f="flat", k="knobbed", s="sunken", x="convex")
+levels(mushrooms$cap.surface) <- c(f="fibrous", g="grooves", s="smooth", y="scaly")
+levels(mushrooms$cap.color) <- c(n="brown", b="buff", c="cinnamon", g="gray", r="green", p="pink", u="purple", e="red", w="white", y="yellow")
+levels(mushrooms$bruises) <- c(t="true", f="false")
+levels(mushrooms$odor) <- c(a="almond", l="anise", c="creosote", y="fishy", f="foul", m="musty", n="none", p="pungent", s="spicy")
+levels(mushrooms$gill.attachment) <- c(a="attached", f="free")
+levels(mushrooms$gill.spacing) <- c(c="close", w="crowded")
+levels(mushrooms$gill.size) <- c(b="broad", n="narrow")
+levels(mushrooms$gill.color) <- c(b="buff", e="red", g="gray", h="chocolate", k="black", n="brown", r="green", o="orange", p="pink", u="purple", w="white", y="yellow")
+levels(mushrooms$stalk.shape) <- c(e="enlarging", t="tapering")
+levels(mushrooms$stalk.root) <- c(b="bulbous", c="club", e="equal", r="rooted")
+levels(mushrooms$stalk.surface.above.ring) <- c(f="fibrous", y="scaly", k="silky", s="smooth")
+levels(mushrooms$stalk.surface.below.ring) <- c(f="fibrous", y="scaly", k="silky", s="smooth")
+levels(mushrooms$stalk.color.above.ring) <- c(n="brown", b="buff", c="cinnamon", g="gray", o="orange", p="pink", e="red", w="white", y="yellow")
+levels(mushrooms$stalk.color.below.ring) <- c(n="brown", b="buff", c="cinnamon", g="gray", o="orange", p="pink", e="red", w="white", y="yellow")
+levels(mushrooms$veil.color) <- c(n="brown", o="orange", w="white", y="yellow")
+levels(mushrooms$ring.number) <- c(n="none", o="one", t="two")
+levels(mushrooms$ring.type) <- c(c="cobwebby", e="evanescent", f="flaring", l="large", n="none", p="pendant", s="sheathing", z="zone")
+levels(mushrooms$spore.print.color) <- c(k="black", n="brown", b="buff", h="chocolate", r="green", o="orange", u="purple", w="white", y="yellow")
+levels(mushrooms$population) <- c(a="abundant", c="clustered", n="numerous", s="scattered", v="several", y="solitary")
+levels(mushrooms$habitat) <- c(g="grasses", l="leaves", m="meadows", p="paths", u="urban", w="waste", d="woods")
+```
+<br>
+The variable **veil.type** only consists of a single level which will not contribute to the models and will be removed.
+
+```{r}
+mushrooms$veil.type <- NULL
+```
+<br>
+
+## Data Visualization
+
+Let us first visualize the class variable to see if there is a majority classifier. It does not appear that one category outweighs the other. 
+
+```{r}
+library(ggplot2)
+prop.table(table(mushrooms$class))
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=class), position="dodge")
+```
+<br>
+Let us examine the features with the class variable to check for any associations.
+
+### Class and Cap Properties
+
+The Chi-squared test returned a p-value less than a significance level of 0.05 for all three properties of the cap. The graph's point out some interesting properties about each class of mushrooms. In the cap shape graph the poisonous mushrooms have more knobbed shapes while edible have more bell shaped. In the cap surface graph there is about a 1000 count difference in fibrous surfaces in edible mushrooms than in poisonous ones. The cap color also shows that more poisonous mushrooms are yellow or cinnamon while edible mushrooms tend to be white, gray, or green.
+
+```{r}
+# Cap Shape
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=cap.shape), position="dodge")
+chisq.test(mushrooms$class, mushrooms$cap.shape)
+# Cap Surface
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=cap.surface), position="dodge")
+chisq.test(mushrooms$class, mushrooms$cap.surface)
+# Cap Color
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=cap.color), position="dodge")
+chisq.test(mushrooms$class, mushrooms$cap.color)
+```
+<br>
+
+### Class and Bruises
+
+The Chi-squared test returned a p-value less than a significance level of 0.05 indicating the two variables are associated. The graph also highlights the fact that the poisonous mushrooms have more bruising than the edible mushrooms. Bruising occurs when certain compounds in the cell walls of the mushroom are exposed to the air. More information can be found here:
+
+* [Identifying Mushrooms Through Bruising and Bleeding](https://www.mushroom-appreciation.com/identifying-mushrooms.html)
+
+```{r}
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=bruises), position="dodge")
+chisq.test(mushrooms$class, mushrooms$bruises)
+```
+
+### Class and Odor
+
+The Chi-squared test returned a p-value less than a significance level of 0.05 indicating the two variables are associated. The graph also highlights the fact that poisonous mushrooms have more variety of smells with creosote being the most common, while edible mushrooms mostly have a musty smell to them.
+
+```{r}
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=odor), position="dodge")
+chisq.test(mushrooms$class, mushrooms$odor)
+```
+
+### Class and Gill Properties
+
+The Chi-squared test returned a p-value less than a significance level of 0.05 for each property. The gill size graph indicated poisonous mushrooms have more narrow gills while edible mushrooms have more broad gills. The gill attachment graph shows that most gills are free for both edible and poisonous mushrooms. Since this variable is almost equal for both classes it will be removed. In the gill color graph poisonous mushrooms have a buff color while none of the edible mushrooms have that color at all
+
+```{r}
+# Gill Size
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=gill.size), position="dodge")
+chisq.test(mushrooms$class, mushrooms$gill.size)
+# Gill Attachment
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=gill.attachment), position="dodge")
+chisq.test(mushrooms$class, mushrooms$gill.attachment)
+mushrooms$gill.attachment <- NULL
+# Gill Spacing
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=gill.spacing), position="dodge")
+chisq.test(mushrooms$class, mushrooms$gill.spacing)
+# Gill Color
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=gill.color), position="dodge")
+chisq.test(mushrooms$class, mushrooms$gill.color)
+```
+<br>
+
+### Class and Stalk Properties
+
+Visualizing the stalk root which contains the large amount of missing data, we can see that both edible and poisonous mushrooms are missing data. We will use the mice function to impute the data and fill in the missing data. Looking at the graphs involving the stalk surface and color it appears that we can combine some of the lower count levels into a single level.
+
+```{r}
+# Stalk Shape
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=stalk.shape), position="dodge")
+chisq.test(mushrooms$class, mushrooms$stalk.shape)
+# Stalk Root
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=stalk.root), position="dodge")
+chisq.test(mushrooms$class, mushrooms$stalk.root)
+# Impute Missing Data
+library(mice)
+mushrooms <- complete(mice(mushrooms, print = FALSE))
+# Stalk Surface Above Ring
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=stalk.surface.above.ring), position="dodge")
+chisq.test(mushrooms$class, mushrooms$stalk.surface.above.ring)
+# Combining Levels
+library(rockchalk)
+mushrooms$stalk.surface.above.ring <- combineLevels(mushrooms$stalk.surface.above.ring, c("smooth", "fibrous"), "other")
+# Stalk Surface Below Ring
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=stalk.surface.below.ring), position="dodge")
+chisq.test(mushrooms$class, mushrooms$stalk.surface.below.ring)
+# Combining Levels
+mushrooms$stalk.surface.below.ring <- combineLevels(mushrooms$stalk.surface.below.ring, c("smooth", "fibrous"), "other")
+# Stalk Color Above Ring
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=stalk.color.above.ring), position="dodge")
+chisq.test(mushrooms$class, mushrooms$stalk.color.above.ring)
+# Combining Levels
+mushrooms$stalk.color.above.ring <- combineLevels(mushrooms$stalk.color.above.ring, c("yellow", "buff", "cinnamon"), "other")
+# Stalk Color Below Ring
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=stalk.color.below.ring), position="dodge")
+chisq.test(mushrooms$class, mushrooms$stalk.color.below.ring)
+# Combining Levels
+mushrooms$stalk.color.below.ring <- combineLevels(mushrooms$stalk.color.below.ring, c("yellow", "buff", "cinnamon"), "other")
+```
+<br>
+
+### Class and Veil Color
+
+Even though the Chi-Squared test does show a significance between this variable and the class variable. I will remove it since the majority of the data is only in a single color.
+
+```{r}
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=veil.color), position="dodge")
+chisq.test(mushrooms$class, mushrooms$veil.color)
+mushrooms$veil.color <- NULL
+```
+### Class and Ring Properties
+
+The Chi-squared test returned a p-value less than a significance level of 0.05 for both variables. The graph also highlights the fact that the majority of edible mushrooms do not have any type of ring while poisonous ring types are mostly cobwebby or flaring. Since there are some counts of levels in the ring type that are very small, I will combine them into a single level.
+
+```{r}
+# Ring Number
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=ring.number), position="dodge")
+chisq.test(mushrooms$class, mushrooms$ring.number)
+# Ring Type
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=ring.type), position="dodge")
+chisq.test(mushrooms$class, mushrooms$ring.type)
+# Combining Levels
+mushrooms$ring.type <- combineLevels(mushrooms$ring.type, c("large", "evanescent"), "other")
+```
+
+### Class and Spore Print Color
+
+The Chi-squared test returned a p-value less than a significance level of 0.05 indicating the two variables are associated. The graph also highlights the fact that the majority of poisonous mushrooms have a white or brown spore print color while edible mushrooms have either a chocolate or buff spore print color. Three levels have very small counts and will be combined into a single level.
+
+```{r}
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=spore.print.color), position="dodge")
+chisq.test(mushrooms$class, mushrooms$spore.print.color)
+# Combining Levels
+mushrooms$spore.print.color <- combineLevels(mushrooms$spore.print.color, c("yellow", "black", "orange", "green", "purple"), "other")
+```
+
+### Class and Population
+
+The Chi-squared test returned a p-value less than a significance level of 0.05 indicating the two variables are associated. The graph also highlights the fact that the majority of poisonous mushrooms are mostly grouped several together, and are not abundant or numerous compared to the edible mushrooms.
+
+```{r}
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=population), position="dodge")
+chisq.test(mushrooms$class, mushrooms$population)
+```
+
+### Class and Habitat
+
+The Chi-squared test returned a p-value less than a significance level of 0.05 indicating the two variables are associated. The graph also highlights the fact that more poisonous mushrooms are found in urban areas than edible mushrooms as well as being non-existent in woods.
+
+```{r}
+ggplot(mushrooms, aes(class, ..count..)) + geom_bar(aes(fill=habitat), position="dodge")
+chisq.test(mushrooms$class, mushrooms$habitat)
+```
+<br>
+
+## Classifying Mushroom Edibility using ML Models
+The following models are trained and tested in this section:
+
+* Naive Bayes
+* C5.0
+* Bagged CART
+* Random Forest
+* Ada Boost
+* Gradient Boost
+* Neural Network
+
+### Preprocessing the data
+
+Splitting the data into the training and test set.
+
+```{r}
+library(caret)
+in_train <- createDataPartition(mushrooms$class, p = 0.80, list = FALSE)
+mushrooms_train <- mushrooms[in_train, ]
+mushrooms_test <- mushrooms[-in_train, ]
+```
+<br>
+
+### Naive Bayes
+
+The Naive Bayes model resulted in ~93% accuracy rating. While this seems good the number of false negatives is not good. Kappa ended with a 0.85 which is good. The AUC is ~0.93 which while good is still not good enough considering the consequences of ingesting a misclassified mushroom.
+
+```{r}
+set.seed(1)
+# Create the model
+naive_bayes_model <- caret::train(class ~ ., data = mushrooms_train,
+                           trControl = trainControl(method = "cv", number = 10),
+                           method = "naive_bayes",
+                           metric = "Accuracy")
+print(naive_bayes_model)
+# Make Predictions
+naive_bayes_pred <- predict(naive_bayes_model, mushrooms_test)
+# View results
+confusionMatrix(naive_bayes_pred, mushrooms_test$class, positive = "edible")
+# Top Predictors
+varImp(naive_bayes_model)
+# ROC & AUC
+pred <- prediction(as.numeric(naive_bayes_pred == "edible"), as.numeric(mushrooms_test$class == "edible"))
+perf <- performance(pred, measure = "tpr", x.measure= "fpr")
+plot(perf, main = "Naive Bayes ROC Curve", col = "blue", lwd= 3)
+abline(a = 0, b = 1, lwd= 2, lty= 2)
+unlist(performance(pred, measure = "auc")@y.values)
+```
+<br>
+
+### C5.0
+
+The c50 model returned an Accuracy and Kappa of 1 meaning it perfectly classified whether the mushrooms is edible or not. The model reported 7 variables that it found to be most useful.
+
+```{r}
+set.seed(1)
+# Create the model
+c50_model <- caret::train(class ~ ., data = mushrooms_train,
+                   trControl = trainControl(method = "cv", number = 10),
+                   method = "C5.0",
+                   metric = "Accuracy")
+print(c50_model)
+# Make Predictions
+c50_pred <- predict(c50_model, mushrooms_test)
+# View results
+confusionMatrix(c50_pred, mushrooms_test$class, positive = "edible")
+# Top Predictors
+varImp(c50_model)
+# ROC & AUC
+pred <- prediction(as.numeric(c50_pred == "edible"), as.numeric(mushrooms_test$class == "edible"))
+perf <- performance(pred, measure = "tpr", x.measure= "fpr")
+plot(perf, main = "c50 ROC Curve", col = "blue", lwd= 3)
+abline(a = 0, b = 1, lwd= 2, lty= 2)
+unlist(performance(pred, measure = "auc")@y.values)
+```
+<br>
+
+### Bagged CART
+
+The bagging model also perfectly predicted the class variable. It also has the odor-musty as the best predictor which the C50 algorithm choose as well.
+
+```{r}
+set.seed(1)
+# Create the model
+bag_model <- caret::train(class ~ ., data = mushrooms_train,
+                   trControl = trainControl(method = "cv", number = 10),
+                   method = "treebag",
+                   metric = "Accuracy")
+print(bag_model)
+# Make Predictions
+bag_pred <- predict(bag_model, mushrooms_test)
+# View results
+confusionMatrix(bag_pred, mushrooms_test$class, positive = "edible")
+# Top Predictors
+varImp(bag_model)
+# ROC & AUC
+pred <- prediction(as.numeric(bag_pred == "edible"), as.numeric(mushrooms_test$class == "edible"))
+perf <- performance(pred, measure = "tpr", x.measure= "fpr")
+plot(perf, main = "Bagging ROC Curve", col = "blue", lwd= 3)
+abline(a = 0, b = 1, lwd= 2, lty= 2)
+unlist(performance(pred, measure = "auc")@y.values)
+```
+<br>
+
+### Random Forest
+
+```{r}
+set.seed(1)
+# Create the model
+rf_model <- caret::train(class ~ ., data = mushrooms_train,
+                   trControl = trainControl(method = "cv", number = 10),
+                   method = "rf",
+                   metric = "Accuracy")
+print(rf_model)
+# Make Predictions
+rf_pred <- predict(rf_model, mushrooms_test)
+# View results
+confusionMatrix(rf_pred, mushrooms_test$class, positive = "edible")
+# Top Predictors
+varImp(rf_model)
+# ROC & AUC
+pred <- prediction(as.numeric(rf_pred == "edible"), as.numeric(mushrooms_test$class == "edible"))
+perf <- performance(pred, measure = "tpr", x.measure= "fpr")
+plot(perf, main = "Random Forest ROC Curve", col = "blue", lwd= 3)
+abline(a = 0, b = 1, lwd= 2, lty= 2)
+unlist(performance(pred, measure = "auc")@y.values)
+```
+<br>
+
+### Boosting
+
+## Ada Boosting
+```{r}
+set.seed(1)
+# Create the model
+ada_model <- caret::train(class ~ ., data = mushrooms_train,
+                   trControl = trainControl(method = "cv", number = 10),
+                   method = "adaboost",
+                   metric = "Accuracy")
+print(ada_model)
+# Make Predictions
+ada_pred <- predict(ada_model, mushrooms_test)
+# View results
+confusionMatrix(ada_pred, mushrooms_test$class, positive = "edible")
+# Top Predictors
+varImp(ada_model)
+# ROC & AUC
+pred <- prediction(as.numeric(ada_pred == "edible"), as.numeric(mushrooms_test$class == "edible"))
+perf <- performance(pred, measure = "tpr", x.measure= "fpr")
+plot(perf, main = "Ada Boosting ROC Curve", col = "blue", lwd= 3)
+abline(a = 0, b = 1, lwd= 2, lty= 2)
+unlist(performance(pred, measure = "auc")@y.values)
+```
+<br>
+
+## Gradient Boost
+
+```{r}
+set.seed(1)
+# Create the model
+grad_model <- caret::train(class ~ ., data = mushrooms_train,
+                   trControl = trainControl(method = "cv", number = 10),
+                   method = "gbm",
+                   metric = "Accuracy",
+                   verbose = FALSE)
+print(grad_model)
+# Make Predictions
+grad_pred <- predict(grad_model, mushrooms_test)
+# View results
+confusionMatrix(grad_pred, mushrooms_test$class, positive = "edible")
+# ROC & AUC
+pred <- prediction(as.numeric(grad_pred == "edible"), as.numeric(mushrooms_test$class == "edible"))
+perf <- performance(pred, measure = "tpr", x.measure= "fpr")
+plot(perf, main = "Gradient Boosting ROC Curve", col = "blue", lwd= 3)
+abline(a = 0, b = 1, lwd= 2, lty= 2)
+unlist(performance(pred, measure = "auc")@y.values)
+```
+<br>
+
+### Comparing the Results
+
+They basically all performed great except Naive Bayes. It performed the worst of them all, it also had a bunch of false negatives which can not be permitted when it comes to ingesting poisonous mushrooms. 
+
+```{r}
+compare <- resamples(list(NB = naive_bayes_model, C = c50_model, B =bag_model, RF = rf_model, A = ada_model, G = grad_model))
+summary(compare)
+```
+
+### Training a Neural Network
+
+Lets create a validation dataset from our training set
+
+```{r}
+val.index <- createDataPartition(mushrooms_train$class, p = 0.80, list = FALSE)
+mushrooms_train <- mushrooms_train[val.index, ]
+mushrooms_val <- mushrooms_train[-val.index, ]
+```
+<br>
+
+Since all our variables are categorical we will have to one-hot-encode them to put them through a neural network
+
+```{r}
+library(mltools)
+library(data.table)
+mushrooms_train_one_hot <- one_hot(data.table(mushrooms_train[, -1]))
+mushrooms_train_labels <- one_hot(data.table(mushrooms_train$class))
+mushrooms_test_one_hot <- one_hot(data.table(mushrooms_test[, -1]))
+mushrooms_test_labels <- one_hot(data.table(mushrooms_test$class))
+mushrooms_val_one_hot <- one_hot(data.table(mushrooms_val[, -1]))
+mushrooms_val_labels <- one_hot(data.table(mushrooms_val$class))
+```
+<br>
+
+Lets create a basic neural network and see how it performs. We'll use only a single hidden layer for now. It appears that is is predicting the class perfectly.
+
+```{r}
+library(keras)
+model <- keras_model_sequential()
+model %>%
+  layer_dense(units = 256, input_shape = dim(mushrooms_train_one_hot)[2], activation = 'relu') %>%
+  layer_dense(units = 75, activation = 'relu') %>%
+  layer_dense(units = 2, activation = 'sigmoid')
+
+model %>% compile(
+  optimizer = 'adam',
+  loss = 'categorical_crossentropy',
+  metrics = 'accuracy',
+)
+
+set.seed(1)
+history <- model %>% fit(
+  as.matrix(mushrooms_train_one_hot),
+  as.matrix(mushrooms_train_labels),
+  epochs = 100,
+  batch_size = 64,
+  verbose = 0,
+  validation_data = list(as.matrix(mushrooms_val_one_hot), as.matrix(mushrooms_val_labels)))
+
+plot(history)
+```
+<br>
+
+Let's evaluate the model. The loss is extremely small and the accuracy is 100%
+
+```{r}
+model %>% evaluate(as.matrix(mushrooms_test_one_hot), as.matrix(mushrooms_test_labels))
+```
+<br>
+
+Although our model is doing well let's tune some hyper-parameters. Looking at the results, most of the runs have a validation accuracy of 1 as well as validation loss that is incredibly small.
+
+```{r}
+library(tfruns)
+set.seed(1)
+runs <- tuning_run(
+  file = "mushrooms.R",
+  flags = list(nodes = c(64, 128, 256),
+  learning_rate = c(0.01, 0.05, 0.001, 0.0001),
+  batch_size = c(100, 200, 500, 1000),
+  epochs = c(30, 50, 100),
+  activation = c("relu", "sigmoid", "tanh")),
+  sample = 0.02)
+
+runs
+```
+<br>
+
+We'll use the first run from the list of runs to train a model on both the training data and the validation data.
+
+```{r}
+view_run(runs$run_dir[1])
+mushrooms_train_one_hot <- one_hot(data.table(mushrooms_train[, -1]))
+mushrooms_train_labels <- one_hot(data.table(mushrooms_train$class))
+```
+
+```{r}
+model <- keras_model_sequential()
+model %>%
+  layer_dense(units = 64, input_shape = dim(mushrooms_train_one_hot)[2], activation = 'tanh') %>%
+  layer_dense(units = 64, activation = 'tanh') %>%
+  layer_dense(units = 2, activation = 'sigmoid')
+
+model %>% compile(
+  optimizer = optimizer_adam(lr = 0.001),
+  loss = 'categorical_crossentropy',
+  metrics = 'accuracy',
+)
+
+set.seed(1)
+history <- model %>% fit(
+  as.matrix(mushrooms_train_one_hot),
+  as.matrix(mushrooms_train_labels),
+  epochs = 30,
+  batch_size = 200,
+  verbose = 0,
+  validation_data = list(as.matrix(mushrooms_test_one_hot), as.matrix(mushrooms_test_labels)))
+
+model %>% evaluate(as.matrix(mushrooms_test_one_hot), as.matrix(mushrooms_test_labels))
+```
+<br>
+
+```{r}
+predictions <- model %>% predict(as.matrix(mushrooms_test_one_hot))
+predictions <- apply(predictions, 1, which.max)
+predictions <- as.factor(predictions)
+levels(predictions) <- c("edible", "poisonous")
+confusionMatrix(predictions, mushrooms_test$class)
+```
